@@ -178,7 +178,7 @@ export const {
           throw new Error("用户名或密码错误")
         }
 
-        const isValid = await comparePassword(parsedCredentials.password, user.password as string)
+        const isValid = await comparePassword(parsedCredentials.password, user.password as string, getAuthEnv("AUTH_SECRET") ?? "")
         if (!isValid) {
           throw new Error("用户名或密码错误")
         }
@@ -276,7 +276,7 @@ export async function register(username: string, password: string) {
     throw new Error("用户名已存在")
   }
 
-  const hashedPassword = await hashPassword(password)
+  const hashedPassword = await hashPassword(password, getAuthEnv("AUTH_SECRET") ?? "")
 
   const [user] = await db.insert(users)
     .values({
