@@ -21,6 +21,22 @@ const ROLE_DESCRIPTIONS: Record<Role, string> = {
   [ROLES.CIVILIAN]: "平民（普通用户）",
 }
 
+// Cloudflare Pages Edge 运行时只能通过 getRequestContext().env 拿到
+// `wrangler pages secret bulk` 推送的运行时 secrets，process.env 拿不到。
+// 本地 `next dev` 则走 process.env，这里做兼容 fallback。
+const getAuthEnv = (key: string): string | undefined => {
+  try {
+    const env = getRequestContext().env as unknown as Record<string, unknown>
+    const value = env?.[key]
+    if (typeof value === "string" && value.length > 0) {
+      return value
+    }
+  } catch {
+    // 非 Cloudflare 运行时（如本地 next dev 未 setupDevPlatform）忽略，走 process.env
+  }
+  return process.env[key]
+}
+
 const getDefaultRole = async (): Promise<Role> => {
   const defaultRole = await getRequestContext().env.SITE_CONFIG.get("DEFAULT_ROLE")
 
@@ -93,24 +109,36 @@ export const {
   auth,
   signIn,
   signOut
-} = NextAuth(() => ({
-  secret: process.env.AUTH_SECRET,
+} = NextAuth(() => {
+  const googleId = getAuthEnv("AUTH_GOOGLE_ID")
+  const googleSecret = getAuthEnv("AUTH_GOOGLE_SECRET")
+
+  return {
+  secret: getAuthEnv("AUTH_SECRET"),
+  // Cloudflare Pages 自定义域（如 qqemail.eu.org）必需，否则报 UntrustedHost
+  // 前端表现同样是 Server error / error=Configuration
+  trustHost: true,
   adapter: DrizzleAdapter(createDb(), {
     usersTable: users,
     accountsTable: accounts,
   }),
   providers: [
     GitHub({
-      clientId: process.env.AUTH_GITHUB_ID,
-      clientSecret: process.env.AUTH_GITHUB_SECRET,
+      clientId: getAuthEnv("AUTH_GITHUB_ID"),
+      clientSecret: getAuthEnv("AUTH_GITHUB_SECRET"),
       allowDangerousEmailAccountLinking: true,
       issuer: "https://github.com/login/oauth",
     }),
-    Google({
-      clientId: process.env.AUTH_GOOGLE_ID,
-      clientSecret: process.env.AUTH_GOOGLE_SECRET,
-      allowDangerousEmailAccountLinking: true,
-    }),
+    // Google 为可选：空值时不注册，避免污染整个 Auth 配置导致 GitHub 也 Configuration
+    ...(googleId && googleSecret
+      ? [
+          Google({
+            clientId: googleId,
+            clientSecret: googleSecret,
+            allowDangerousEmailAccountLinking: true,
+          }),
+        ]
+      : []),
     CredentialsProvider({
       name: "Credentials",
       credentials: {
@@ -234,7 +262,8 @@ export const {
   session: {
     strategy: "jwt",
   },
-}))
+  }
+})
 
 export async function register(username: string, password: string) {
   const db = createDb()
